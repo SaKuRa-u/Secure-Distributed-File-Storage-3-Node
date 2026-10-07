@@ -10,8 +10,8 @@ etcd quorum) and SeaweedFS object storage, fronted on a hardened VPS edge
 ```text
 VPS/      Edge di VPS: NetBird server, HAProxy 3.4 + Coraza WAF,
           Authentik (SSO/OIDC) + LLDAP, etcd voter (quorum witness).
-NODE1/    Aplikasi toko + PostgreSQL/Patroni + SeaweedFS (node 1, Kak Dita).
-NODE2/    Aplikasi toko + PostgreSQL/Patroni + SeaweedFS (node 2, Gabriel).
+NODE1/    Aplikasi toko + PostgreSQL/Patroni + SeaweedFS.
+NODE2/    Aplikasi toko + PostgreSQL/Patroni + SeaweedFS.
 ```
 
 - `VPS/haproxy/` — reverse proxy + load balancer (round-robin + sticky),
