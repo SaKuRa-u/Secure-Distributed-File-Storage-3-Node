@@ -1,0 +1,17 @@
+# Patroni + PostgreSQL 16 dalam 1 image (Fase C).
+# Basis postgres:16 resmi -> versi PG identik dengan container db lama
+# (data hasil pg_basebackup/dump-restore kompatibel penuh).
+# Patroni jalan sebagai user postgres (pg_ctl menolak root).
+FROM postgres:16
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-psycopg libpq-dev gcc \
+    && pip install --no-cache-dir --break-system-packages "patroni[etcd,etcd3]~=4.0" \
+    && apt-get purge -y gcc libpq-dev \
+    && apt-get autoremove -y && apt-get clean && rm -rf /var/lib/apt/lists/*
+COPY patroni-entrypoint.sh /usr/local/bin/patroni-entrypoint.sh
+RUN chmod +x /usr/local/bin/patroni-entrypoint.sh \
+    && mkdir -p /var/lib/postgresql/data/pgdata /etc/patroni
+# SENGAJA tetap root di sini: entrypoint chown volume data lalu gosu ke
+# postgres (pg_ctl menolak root). Jangan tambah USER postgres.
+EXPOSE 5432 8008
+ENTRYPOINT ["/usr/local/bin/patroni-entrypoint.sh"]

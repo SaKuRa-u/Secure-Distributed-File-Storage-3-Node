@@ -1,0 +1,15 @@
+# .htaccess (root)
+# Nonaktifkan directory listing di seluruh aplikasi
+Options -Indexes
+
+# Sembunyikan file .sql, .log, .md dari akses langsung browser
+<FilesMatch "\.(sql|log|md|env)$">
+    Require all denied
+</FilesMatch>
+
+# Blokir akses langsung ke folder class/ lewat URL
+# (class hanya boleh diakses lewat require_once dari PHP, bukan URL)
+RewriteEngine On
+RewriteRule ^class/ - [F,L]
+RewriteRule ^logs/ - [F,L]
+

@@ -1,0 +1,168 @@
+﻿services:
+  web:
+    build: .
+    container_name: psp-web
+    ports:
+      - "8080:80"
+    volumes:
+      - ./src:/var/www/html
+      - ./php-conf/zz-ops.ini:/usr/local/etc/php/conf.d/zz-ops.ini:ro
+    depends_on:
+      - db
+      - filer
+    environment:
+      # --- Koneksi PostgreSQL (dibaca src/connection.php) ---
+      DB_HOST: "db"
+      DB_PORT: "5432"
+      DB_USER: "psp"
+      DB_PASSWORD: ""
+      DB_NAME: "psp_project"
+      # --- SeaweedFS ---
+      # Dari DALAM container web, filer diakses via nama service
+      SEAWEED_FILER_INTERNAL: "http://filer:8888"
+      # Daftar SEMUA filer untuk READ-THROUGH image-proxy (SAMA di semua node,
+      # koma tanpa spasi). Namespace filer per node: entry hanya di node penulis,
+      # proxy mencoba satu per satu hingga 200. Timeout peer pendek (8/3 dtk)
+      # agar halaman tidak hang saat 1 node mati.
+      SEAWEED_FILER_PEERS: "http://100.101.136.77:8888,http://100.101.133.237:8888"
+      # URL yang dilihat BROWSER LANGSUNG (mode direct, HANYA untuk akses
+      # lokal/NetBird, cth http://192.168.92.135:8888).
+      # Untuk situs publik https://app.cloudferdi.web.id JANGAN pakai IP ini â€”
+      # browser internet tidak bisa menjangkau IP privat + HTTP (Mixed Content
+      # + Private Network Access). Aplikasi sekarang memakai image-proxy.php
+      # (same-origin HTTPS, storage tetap SeaweedFS), jadi variable ini
+      # tidak dipakai untuk <img src>. Biarkan apa adanya untuk debug lokal.
+      # Nanti kalau HAProxy di VPS sudah expose filer via HTTPS
+      # (cth https://files.cloudferdi.web.id -> filer:8888 Node1/Node2),
+      # isi PUBLIC dengan domain itu + whitelist di security_headers.php
+      # + ubah SeaweedFS::publicUrl() ke mode direct.
+      # Bisa dioverride tanpa edit file: NODE2_IP=192.168.x.x docker compose up
+      SEAWEED_FILER_PUBLIC: "http://192.168.92.135:8888"
+      # --- SSO Authentik (OIDC) â€” customer login via SSO, staf via login.php ---
+      # Issuer = URL provider Authentik + trailing slash, cth:
+      #   https://auth.contoh.id/application/o/psp-shop/
+      AUTHENTIK_ISSUER: "https://auth.cloudferdi.web.id/application/o/psp-shop/"
+      OIDC_CLIENT_ID: "8Xau573Yx7BFidc3Orx2XBTnmlN1O8e6BBLrlH2a"
+      # ISI MANUAL via environment (jangan commit secret): OIDC_CLIENT_SECRET=... docker compose up
+      OIDC_CLIENT_SECRET: ""
+      # Base URL aplikasi publik (tanpa trailing slash), cth https://app.cloudferdi.web.id
+      APP_URL: "https://app.cloudferdi.web.id"
+      # --- SCIM provisioning pegawai (Authentik -> passwordless) ---
+      # Base SCIM source Authentik, cth https://auth.contoh.id/source/scim/<slug>/v2
+      # (tanpa trailing slash). Token = Bearer khusus SCIM source (isi via env, jangan commit).
+      AUTHENTIK_SCIM_URL: "https://auth.cloudferdi.web.id/source/scim/shop-provisioning/v2"
+      AUTHENTIK_SCIM_TOKEN: ""
+      # UUID grup psp-pegawai (admin salin sekali dari URL grup di Authentik).
+      AUTHENTIK_PEGAWAI_GROUP_ID: "2489ba50-8752-403e-9a40-a135260d8498"
+    restart: unless-stopped
+
+  # ============ PostgreSQL 16 (menggantikan MySQL) ============
+  # Tahap DCSM berikutnya: ganti service ini dengan cluster
+  # Patroni + etcd (lihat kotak PostgreSQL/Patroni/etcd di arsitektur).
+  db:
+    image: postgres:16
+    container_name: psp-db
+    environment:
+      POSTGRES_USER: psp
+      POSTGRES_PASSWORD: ""
+      POSTGRES_DB: psp_project
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./db-init:/docker-entrypoint-initdb.d
+    restart: unless-stopped
+
+  # Adminer pengganti phpMyAdmin (phpMyAdmin hanya bisa MySQL).
+  # Buka http://<IP>:8081 lalu isi:
+  #   System: PostgreSQL | Server: db | Username: psp
+  #   Password: psp_secret | Database: psp_project
+  adminer:
+    image: adminer:latest
+    container_name: psp-adminer
+    ports:
+      - "8081:8080"
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  # ============ SeaweedFS (Object Storage) ============
+  # Master: pencatat lokasi file (metadata cluster)
+  master:
+    image: chrislusf/seaweedfs:latest
+    container_name: seaweed-master
+    command: "master -ip=master -port=9333 -mdir=/data -volumeSizeLimitMB=512"
+    ports:
+      - "9333:9333"
+      - "19333:19333"
+    volumes:
+      - master_data:/data
+    restart: unless-stopped
+
+  # Volume: penyimpan byte file sebenarnya.
+  # ATURAN KERAS: port host HARUS SAMA dengan port container (18080:18080)!
+  # Alasannya: volume mengiklankan diri sebagai ip:port-nya ke master, dan
+  # node lain menghubungi alamat itu apa adanya. Dulu 18080:8080 -> volume
+  # mengiklankan :8080, node lawan menembak port 8080 host = container WEB
+  # (Apache!) -> PUT lintas node timeout ("context deadline exceeded").
+  # grpc volume = port+10000 = 28080 (dipetakan juga untuk heartbeat/admin).
+  # Rack BEDA per node (Node1=r1, Node2/dst=r2, dst.) via ENV â€” WAJIB beda
+  # supaya SeaweedFS Native Replication fase berikutnya bisa menaruh
+  # 2 copy di node berbeda (placement 001/010). Selama masih 000 (single),
+  # label ini tidak mengubah perilaku apa pun.
+  #   Node 1: SEAWEED_RACK=r1 (default) | Node 2: SEAWEED_RACK=r2
+  volume:
+    image: chrislusf/seaweedfs:latest
+    container_name: seaweed-volume
+    command: >-
+      volume -port=18080 -dir=/data -mserver=master:9333
+      -dataCenter=dc1 -rack=${SEAWEED_RACK:-r1}
+    ports:
+      - "18080:18080"
+      - "28080:28080"
+    volumes:
+      - volume_data:/data
+    depends_on:
+      - master
+    restart: unless-stopped
+
+  # Filer: REST API + S3 gateway yang dipakai PHP
+  #   Filer HTTP : :8888  (dipakai class SeaweedFS.php sekarang)
+  #   S3 API     : :8333  (cadangan kalau nanti mau pakai AWS SDK)
+  filer:
+    image: chrislusf/seaweedfs:latest
+    container_name: seaweed-filer
+    # PENTING: single-node (testing/demo) pakai 000.
+    # 001 butuh >= 2 volume server (Node 1 + Node 2), kalau dipaksa di
+    # 1 node, master akan error "No matching data node found".
+    command: >-
+      filer -port=8888 -s3 -s3.port=8333
+      -master=master:9333 -dataCenter=dc1
+      -defaultReplicaPlacement=000
+    ports:
+      - "8888:8888"
+      - "8333:8333"
+      - "18888:18888"
+    volumes:
+      - filer_data:/data/filer
+    depends_on:
+      - master
+      - volume
+    restart: unless-stopped
+
+  # ---------- CONTOH JOIN 2 NODE (Node 1 Kak Dita + Node 2 Gabriel) ----------
+  # Di Node 1, ganti command master menjadi (menyebut peer Node 2):
+  #   command: "master -ip=master -port=9333 -mdir=/data -peers=<IP-Node2>:9333 -volumeSizeLimitMB=512"
+  # Di Node 2 (punyamu), ganti menjadi:
+  #   command: "master -ip=master -port=9333 -mdir=/data -peers=<IP-Node1>:9333 -volumeSizeLimitMB=512"
+  # Lalu volume masing-masing tetap -mserver=master:9333 (lokal),
+  # dan UBAH filer ke -defaultReplicaPlacement=001 agar tiap file disimpan
+  # 2 copy (1 di Node 1, 1 di Node 2) = "SeaweedFS Native Replication".
+  # Pastikan port 9333/18080/8888/8333 dibuka antar VM (lewat NetBird network).
+
+volumes:
+  pg_data:
+  master_data:
+  volume_data:
+  filer_data:
+

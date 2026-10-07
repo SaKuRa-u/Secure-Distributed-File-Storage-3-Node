@@ -1,0 +1,62 @@
+# docker-compose.cluster.yml — OVERRIDE Fase A (SeaweedFS Native Replication).
+#
+# JANGAN dipakai sebelum sesi joint 3 master siap (VPS + Node 1 + Node 2
+# bareng, jam sepi)! File ini SENGAJA tidak aktif sendiri; base
+# docker-compose.yml tetap mode standalone agar aman ditimpa kapan pun.
+#
+# Cara pakai saat sesi joint, PER NODE (Node 1 dulu, Node 2 kemudian):
+#   Node 1:  export SEAWEED_IP=100.101.136.77 SEAWEED_RACK=r1
+#   Node 2:  export SEAWEED_IP=100.101.133.237 SEAWEED_RACK=r2
+#   docker compose -f docker-compose.yml -f docker-compose.cluster.yml up -d master volume filer
+# Variabel WAJIB isi (sengaja tanpa default -> compose error daripada jalan salah).
+# - SEAWEED_IP   : IP NetBird node INI (diiklankan ke cluster; tanpa ini chunk
+#                  memakai IP docker-internal 172.x yang tak reachable antar node)
+# - SEAWEED_RACK : r1 (Node 1) / r2 (Node 2). WAJIB beda! Kalau sama, placement
+#                  010 tidak dapat menaruh copy ke-2 -> upload GAGAL total.
+# - -ip.bind=0.0.0.0 : dengar di semua interface (tanpa ini grpc 19333 mati
+#   dari luar seperti temuan pra-Fase A; verified dari source master.go/volume.go)
+# - peers/master : 3 alamat (N1, N2, VPS). Quorum 2/3. JANGAN peer 2 saja.
+# - placement 010 : copy di rack beda, DC sama (dc1). BUKAN 001 (itu DC beda).
+services:
+  master:
+    command: "master -ip=${SEAWEED_IP:?isi IP NetBird node ini} -ip.bind=0.0.0.0 -port=9333 -mdir=/data -volumeSizeLimitMB=512 -peers=100.101.136.77:9333,100.101.133.237:9333,100.101.161.30:9333"
+  volume:
+    command: >-
+      volume -ip=${SEAWEED_IP:?isi IP NetBird node ini} -ip.bind=0.0.0.0 -port=18080 -dir=/data -master=100.101.136.77:9333,100.101.133.237:9333,100.101.161.30:9333
+      -dataCenter=dc1 -rack=${SEAWEED_RACK:?isi r1 untuk Node1 / r2 untuk Node2}
+  filer:
+    command: >-
+      filer -port=8888 -s3 -s3.port=8333
+      -master=100.101.136.77:9333,100.101.133.237:9333,100.101.161.30:9333 -dataCenter=dc1
+      -defaultReplicaPlacement=010
+
+  # ---------- Fase B: etcd member (untuk Patroni Fase C) ----------
+  # Bootstrap longgar: ketiga member (VPS + N1 + N2) start dengan
+  # initial-cluster IDENTIK -> saling retry sampai quorum, tidak harus
+  # detik yang sama. JANGAN ubah initial-cluster setelah terbentuk!
+  # (member baru nanti via `etcdctl member add`, bukan edit file.)
+  # Token cluster: default "etcd-cluster" (sama seperti vps-voters file) ->
+  # JANGAN tambah --initial-cluster-token di satu sisi saja.
+  # Aktifkan per node (butuh etcd-vps juga up di sesi yang sama):
+  #   export ETCD_NAME=node1 ETCD_IP=100.101.136.77   # Node2: node2 / .133.237
+  #   docker compose -f docker-compose.yml -f docker-compose.cluster.yml up -d etcd
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.13
+    container_name: etcd
+    command: >
+      etcd --name=${ETCD_NAME:?isi node1 ATAU node2} --data-dir /etcd-data
+      --listen-client-urls http://0.0.0.0:2379
+      --advertise-client-urls http://${ETCD_IP:?isi IP NetBird node ini}:2379
+      --listen-peer-urls http://0.0.0.0:2380
+      --initial-advertise-peer-urls http://${ETCD_IP:?isi IP NetBird node ini}:2380
+      --initial-cluster "vps=http://100.101.161.30:2380,node1=http://100.101.136.77:2380,node2=http://100.101.133.237:2380"
+      --initial-cluster-state new
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    volumes:
+      - etcd-data:/etcd-data
+    restart: unless-stopped
+
+volumes:
+  etcd-data:

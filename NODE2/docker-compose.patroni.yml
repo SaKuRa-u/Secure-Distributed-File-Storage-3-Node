@@ -1,0 +1,35 @@
+# docker-compose.patroni.yml — OVERRIDE Fase C (PostgreSQL HA via Patroni).
+#
+# Menggantikan service `db` (postgres:16 polos) dengan image Patroni
+# (Dockerfile.patroni) TANPA mengubah app: nama service + port + volume
+# koneksi tetap, jadi `DB_HOST=db` di web tidak perlu disentuh.
+# Volume data BARU (pg_patroni_data); volume lama pg_data DIBIARKAN sebagai
+# rollback sampai migrasi dinyatakan hijau, baru boleh dihapus.
+#
+# Aktifkan per node BERSAMAAN dengan file config node-nya:
+#   Node 1:  export PATRONI_NODE=node1
+#   Node 2:  export PATRONI_NODE=node2
+#   docker compose -f docker-compose.yml -f docker-compose.patroni.yml up -d --build db
+# (JANGAN up sebelum jendela migrasi Fase C — butuh downtime terjadwal!)
+services:
+  db:
+    # image WAJIB eksplisit: tanpa ini compose menandai hasil build sebagai
+    # "postgres:16" dan MENIMPA tag image resmi di host (berbahaya)!
+    image: psp-patroni-pg16
+    build:
+      context: .
+      dockerfile: Dockerfile.patroni
+    container_name: psp-db
+    ports:
+      - "5432:5432"
+      - "8008:8008"
+    volumes:
+      - pg_patroni_data:/var/lib/postgresql/data
+      - ./patroni-node1.yml:/etc/patroni-node1.yml:ro
+      - ./patroni-node2.yml:/etc/patroni-node2.yml:ro
+    environment:
+      PATRONI_NODE: ${PATRONI_NODE:?isi node1 ATAU node2}
+    restart: unless-stopped
+
+volumes:
+  pg_patroni_data:

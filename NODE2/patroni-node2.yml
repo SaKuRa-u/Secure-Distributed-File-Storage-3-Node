@@ -1,0 +1,49 @@
+﻿# Patroni Node 2 (gabnode2, PRIMARY AWAL â€” data hidup). Pasangan: patroni-node1.yml.
+# KREDENSIAL DEMO â€” JANGAN pakai password ini di production; rotasi via
+# patronictl/REST setelah cluster hijau (lihat tutorial Fase C).
+scope: psp-cluster
+namespace: /service/
+name: pg-node2
+restapi:
+  listen: 0.0.0.0:8008
+  connect_address: 100.101.133.237:8008
+etcd3:
+  protocol: http
+  hosts: 100.101.136.77:2379,100.101.133.237:2379,100.101.161.30:2379
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576
+    # SENGAJA false saat migrasi; dinyalakan via REST setelah replica join
+    # (kalau true sejak awal, restore + tulis macet menunggu standby).
+    synchronous_mode: false
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        max_connections: 100
+        shared_buffers: 128MB
+        max_wal_senders: 10
+        max_replication_slots: 10
+        wal_level: replica
+        hot_standby: "on"
+        password_encryption: scram-sha-256
+  initdb:
+    - encoding: UTF8
+    - locale: C.UTF-8
+    - data-checksums
+  pg_hba:
+    - host replication replicator 0.0.0.0/0 scram-sha-256
+    - host all all 0.0.0.0/0 scram-sha-256
+    - local all all trust
+postgresql:
+  listen: 0.0.0.0:5432
+  connect_address: 100.101.133.237:5432
+  data_dir: /var/lib/postgresql/data/pgdata
+  bin_dir: /usr/lib/postgresql/16/bin
+  authentication:
+    superuser: {username: postgres, password: "CHANGEME"
+    replication: {username: replicator, password: "CHANGEME"
+
