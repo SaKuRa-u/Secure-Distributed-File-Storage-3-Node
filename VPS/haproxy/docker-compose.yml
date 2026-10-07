@@ -1,0 +1,42 @@
+services:
+  haproxy:
+    image: ${HAPROXY_IMAGE:-haproxy:3.4}
+    container_name: haproxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./coraza-spoe.cfg:/usr/local/etc/haproxy/coraza-spoe.cfg:ro
+      - ./certs:/etc/haproxy/certs:ro
+    networks: [edge]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "500m"
+        max-file: "2"
+
+  coraza-spoa:
+    # Build dari tag rilis terverifikasi (ghcr tag suffix -crs4 tidak diverifikasi,
+    # jadi build dari source resmi; butuh `docker compose up --build` pertama kali).
+    build:
+      context: https://github.com/corazawaf/coraza-spoa.git#v0.5.0
+      dockerfile: ./example/Dockerfile
+    image: coraza-spoa:0.5.0
+    container_name: coraza-spoa
+    restart: unless-stopped
+    volumes:
+      - ./coraza-spoa.yaml:/config.yaml:ro
+    networks: [edge]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "500m"
+        max-file: "2"
+
+# Network bersama untuk semua proyek edge (netbird, dst).
+# Buat sekali: docker network create edge
+networks:
+  edge:
+    external: true

@@ -1,0 +1,11 @@
+﻿.env
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.bak*
+backup/
+letsencrypt/
+certs/
+
